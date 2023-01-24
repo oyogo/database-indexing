@@ -1,0 +1,175 @@
+---
+title: "DB_Indexing"
+---
+
+## Database Indexing   
+
+An index is a data structure that makes the searching faster for a specific column in a database.
+
+### Case scenario  
+Let's say you want to query the details of a County in Kenya say Makueni from a database. 
+The database query would be as below:  
+
+```
+SELECT * FROM counties WHERE county_name = 'Makueni'  
+
+```
+*Now this is what happens when the database is not indexed.*  
+The database software will go through every record in the table named counties checking if the county_name for that record is Makueni. What this essentially means is all records have to be checked and the records with the said name will be returned as a result. You can imagine how much time that will take in a scenario where we have a million plus records. Now this is what is termed as full table scan and its what indexing seeks to solve.  
+
+The idea of indexing is basically to speed up search queries and this is achieved by reducing the number of records in a table that need to be checked/examined.  
+
+
+#### An SQLite example  
+
+To create an index use the CREATE INDEX statement with the following index. 
+
+```
+CREATE INDEX county_index 
+on hfcrops_combined_2015to2019(subcounty)
+```
+
+```{r}
+con.sqlite_indexed <- dbConnect(SQLite(), "makueni_db.db")
+dbExecute(con.sqlite_indexed, "CREATE INDEX cnty_index on hfcropscombined (subcounty);")
+```
+
+```{r}
+y <- dbGetQuery(con.sqlite_indexed,"EXPLAIN QUERY PLAN select * from hfcropscombined where subcounty='Kibwezi East';")
+y 
+```
+
+## Add id column 
+```{r}
+hf.cropscombined <- data.table(dbReadTable(con.sqlite_indexed, "hfcrops_combined_2015to2019"))
+hf.cropscombined$id <- seq.int(nrow(hf.cropscombined))
+## indexed
+dbWriteTable(con.sqlite_indexed,"hfcropscombined",hf.cropscombined,overwrite=TRUE)
+dbListTables(con.sqlite_indexed)
+
+checking <- data.table(dbReadTable(con.sqlite_indexed, "hf.cropscombined"))
+
+## not indexed 
+dbWriteTable(con.sqlite,"hfcropscombined",hf.cropscombined,overwrite=TRUE)
+dbListTables(con.sqlite)
+dbDisconnect(consqlite_indexed)
+
+```
+
+
+#### Benchmarking   
+
+```{r}
+library(RSQLite)
+library(DBI)
+library(data.table)
+library(rbenchmark)
+library(dplyr)
+
+
+
+
+benchmark("no_index" = {
+           consqlite <- dbConnect(SQLite(), "makuenidb.db")
+           kaiti_results <- dbGetQuery(consqlite,"select * from hfcropscombined where subcounty='Kaiti';")
+          },
+          "indexed" = {
+            consqlite_indexed <- dbConnect(SQLite(), "makueni_db.db")
+           kaiti_results_indexed <- dbGetQuery(consqlite_indexed,"select * from hfcropscombined where subcounty='Kaiti';")
+          },
+          replications = 1000,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+
+
+
+```
+
+*The downside of indexing*   
+1. Creating indexes does consume space and what this essentially means is a large the table correspondigly means large index and more space.  
+2. Any changes on the table using the add, delete and update commands will require the same operation done on the index.  
+
+*Rule of thumb: * Create an index only if the column for which you're creating the index is queried frequently.  
+
+
+
+### Generate dummy data for shiny app  
+
+```{r}
+#library(fakir)
+
+
+#products <- fake_products(1000000)
+
+con.products <- dbConnect(SQLite(), "products_db.db")
+products <- dbReadTable(con.products,"products")
+#dbWriteTable(con.products,"products",products)
+
+benchmark("filter" = {
+           medical_products <- setDT(products)[category=="Medical"]
+          
+          },
+          "filter_dplyr" = {
+           medicalproduction_dplr <- filter(products,category=="Medical")
+            
+          })
+
+```
+### create an index on the products db  
+
+```{r}
+
+con_prods_indexed <- dbConnect(SQLite(), "products.db")
+dbExecute(con_prods_indexed,"CREATE INDEX prod_index ON products (sent_from);") 
+
+```
+
+### benchmark  
+
+```{r}
+benchmark("prod_index" = {
+           consqlite_prod_indexed <- dbConnect(SQLite(), "products.db")
+           china_products <- dbGetQuery(consqlite_prod_indexed,"select * from products where sent_from='China';")
+          },
+          "prod_notindexed" = {
+            consqlite_prod <- dbConnect(SQLite(), "products_db.db")
+           china_products <- dbGetQuery(consqlite_prod,"select * from products where sent_from='China';")
+          },
+          replications = 1000,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+
+```
+
+
+
+### Same data stored as csv   
+
+```{r}
+write.csv(products,"products.csv")
+```
+
+
+```{r}
+
+benchmark("prod_csv" = {
+            prod_table <- fread("products.csv")
+            china_csv <- prod_table[sent_from=="China",]
+          },
+          "prod_db" = {
+            con_prod <- dbConnect(SQLite(), "products_db.db")
+           china_db <- dbGetQuery(con_prod,"select * from products where sent_from='China';")
+          },
+          replications = 1000,
+          columns = c("test", "replications", "elapsed",
+                      "relative", "user.self", "sys.self"))
+
+```
+
+
+References    
+1. SQLite docs: https://www.sqlite.org/queryplanner.html#covidx
+2. SQLite tutorial: https://www.sqlitetutorial.net/sqlite-index/
+3. StackOverflow: https://stackoverflow.com/questions/1108/how-does-database-indexing-work    
+4. MySQL docs: https://dev.mysql.com/doc/refman/8.0/en/mysql-indexes.html     
+
